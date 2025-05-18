@@ -756,218 +756,64 @@ fn main() -> anyhow::Result<()> {
     log::debug!("Connecting to device");
     let system = servers[0].connect()?;
     log::debug!("Connected to device");
-    
-    // Get the first core (usually CPU0)
-    log::debug!("Getting cores");
-    let cores = [
-        system.get_core(0)?,
-        //system.get_core(1)?,
-        //system.get_core(2)?,
-        //system.get_core(3)?,
+
+    let args: Vec<String> = std::env::args().collect();
+    let core_index = args[1].parse::<usize>()?;
+    let core = system.get_core(core_index)?;
+
+    // create breakpoints
+    let breakpoint_addresses = [
+        0x801e8768,
+        0x801eb996,
+        0x801f3c00,
+        0x801e61c4,
+        0x801e74f2
     ];
-    log::debug!("Got cores");
-
-    // reset and halt running cores
-    log::debug!("Resetting cores");
-    for core in &cores {
-        //let system_reset = ResetClass::construct_reset_class(core, 0);
-        //core.reset(system_reset, true)?;
-        core.download_triggers();
-    }
-    log::debug!("Cores reset and halted");
-
-    // setting breakpoint
-    let breakpoint_address = 0x80534af0;
     let mut triggers = Vec::new();
-    for i in 0..cores.len() {
-        loop {
-            let core = &cores[i];
-            match core.create_hardware_breakpoint(TriggerType::IP, breakpoint_address, 4) {
-                Ok(trigger) => {
-                    log::debug!("Breakpoint set on core {}", i);
-                    triggers.push(trigger);
-                    break;
-                }
-                Err(e) => {
-                    log::error!("Error setting breakpoint on core {}: {}", i, e);
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
+    for breakpoint_address in breakpoint_addresses {
+        let trigger = core.create_hardware_breakpoint(TriggerType::IP, breakpoint_address, 0)?;
+        triggers.push(trigger);
     }
 
-    // disable safety watchdog
-    /*log::debug!("Disabling safety watchdog");
-    for core in &cores {
-        disable_cpu_watchdog(core)?;
-        disable_safety_watchdog(core)?;
-    }
-    log::debug!("Safety watchdog disabled");*/
+    // download triggers    
+    core.download_triggers();
 
-     /*// stoppping core
-     for i in 0..cores.len() {
-        let core = &cores[i];
-        loop {
-            match core.stop(false) {
-                Ok(_) => {
-                    log::debug!("Core {} stopped", i);
-                    wait_for_core_to_stop(core);
-                    break;
-                }
-                Err(e) => {
-                    log::error!("Error stopping core {}: {}", i, e);
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-    }*/
+    // get pc register
+    let groups = core.register_groups()?;
+    let group = groups.get_group(0)?;
+    let pc_register = group.register("PC")
+        .ok_or_else(|| anyhow::Error::msg("Could not find PC register"))?;
+
     
-    // run cores
-    log::debug!("Running cores");
-    for i in 0..cores.len() {
-        loop {
-            let core = &cores[i];
-            log::debug!("Running core {}", i);
-            match core.run() {
-                Ok(_) => {
-                    log::debug!("Core {} running", i);
-                    wait_for_core_to_run(core);
-                    break;
+    // watch state
+    loop {
+        // check state
+        let state = match core.query_state() {
+            Ok(state) => state,
+            Err(e) => {
+                if e.event_error_code() == EventError::Reset {
+                    log::debug!("Core reset");
+                    continue;
                 }
-                Err(e) => log::error!("Error running core {}: {}", i, e),
+                log::error!("Error querying core state: {}", e);
+                continue;
             }
+        };
+
+        // check pc
+        let pc = pc_register.read()?;
+        let is_breakpoint = breakpoint_addresses.contains(&(pc as u64));
+        if is_breakpoint {
+            log::debug!("breakpoint hit; pc = 0x{:X}", pc);
+            log::debug!("state = {:?}", state.state);
         }
-    }
-    log::debug!("Cores running");
 
-    /*// sleep
-    log::debug!("Sleeping for 3 seconds");
-    std::thread::sleep(Duration::from_secs(3));
-    log::debug!("Sleeping done");
-
-    // stoppping core
-    for i in 0..cores.len() {
-        let core = &cores[i];
-        loop {
-            match core.stop(false) {
-                Ok(_) => {
-                    log::debug!("Core {} stopped", i);
-                    break;
-                }
-                Err(e) => {
-                    log::error!("Error stopping core {}: {}", i, e);
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
+        if state.state == rust_mcd::core::CoreState::Running {
+            continue;
         }
-    }
 
-    // wait for core to stop
-    for i in 0..cores.len() {
-        loop {
-            let core = &cores[i];
-            // Verify core is actually stopped
-            match core.query_state() {
-                Ok(state) => {
-                    log::debug!("Core {} state after stop: {:?}", i, state.state);
-                    if state.state == rust_mcd::core::CoreState::Debug {
-                        log::debug!("Core {} is in Debug state after stop!", i);
-                        break;
-                    } else {
-                        log::warn!("Core {} is not in Debug state after stop!", i);
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                },
-                Err(e) => log::warn!("Failed to query core {} state: {}", i, e)
-            }
-        }
-    }
-
-    // run cores
-    log::debug!("Running cores");
-    for i in 0..cores.len() {
-        loop {
-            let core = &cores[i];
-            match core.run() {
-                Ok(_) => {
-                    log::debug!("Core {} running", i);
-                    break;
-                }
-                Err(e) => {
-                    log::error!("Error running core {}: {}", i, e);
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-        log::debug!("Cores running");
-    }*/
-
-    // Wait for the breakpoint to be hit
-    log::debug!("Waiting for breakpoint to be hit");
-    for i in 0..cores.len() {
-        loop {
-            let core = &cores[i];
-            // check state
-            let state = match core.query_state() {
-                Ok(state) => state,
-                Err(e) => {
-                    match e.event_error_code() {
-                        EventError::Reset => {
-                            log::debug!("Core {} reset", i);
-
-                            /*log::debug!("Stopping core {}", i);
-                            core.stop(false)?;
-                            wait_for_core_to_stop(core);
-                            log::debug!("Creating breakpoint on core {}", i);
-                            let _trigger = core.create_hardware_breakpoint(TriggerType::IP, breakpoint_address, 4)?;
-                            log::debug!("Running core {}", i);
-                            core.run()?;
-                            wait_for_core_to_run(core);*/
-
-                            disable_cpu_watchdog(core)?;
-                            disable_safety_watchdog(core)?;
-
-                            continue;
-                        }
-                        _ => {
-                            log::error!("Error querying core {}: {}", i, e);
-                            continue;
-                        }
-                    }
-                }
-            };
-            match state.state {
-                rust_mcd::core::CoreState::Debug => {
-                    let groups = core.register_groups()?;
-                    let group = groups.get_group(0)?;
-                    let pc = group.register("PC")
-                        .ok_or_else(|| anyhow::Error::msg("Could not find PC register"))?
-                        .read()?;
-                    log::debug!("core {} in debug state at 0x{:X}", i, pc);
-
-                    /*if pc != breakpoint_address as u32 {
-                        core.run()?;
-                    }*/
-                    //break;
-                }
-                rust_mcd::core::CoreState::Running => {
-                    // Still running, wait a bit
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                rust_mcd::core::CoreState::Halted => {
-                    log::debug!("Core {} is halted", i);
-                    //break;
-                }
-                rust_mcd::core::CoreState::Unknown => {
-                    log::debug!("Core {} is stopped", i);
-                    //break;
-                },
-                rust_mcd::core::CoreState::Custom => {
-                    log::debug!("Core {} is in custom state", i);
-                    //break;
-                }
-            }
-        }
+        log::debug!("Core state: {:?}", state.state);
+        std::thread::sleep(Duration::from_millis(1));
     }
 
     Ok(())
