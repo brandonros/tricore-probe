@@ -39,7 +39,7 @@ fn load_library() -> anyhow::Result<crate::mcd_bindings::DynamicMCDxDAS> {
         std::env::var("DAS_HOME").with_context(|| "Unable to determine path to mcdxdas.dll")?,
     );
     log::info!("DAS_HOME: {:?}", das_home);
-    let mcd_das_dll_path = das_home.join("clients/mcdxdas.dll");
+    let mcd_das_dll_path = das_home.join("bin/mcdxdas.dll");
     unsafe { crate::mcd_bindings::DynamicMCDxDAS::new(mcd_das_dll_path) }
-        .with_context(|| "Unable to load mcdxdas.dll")
+        .with_context(|| "Unable to load mcdxdas64.dll")
 }
