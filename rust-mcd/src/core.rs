@@ -50,6 +50,16 @@ impl<'a> Core<'a> {
         }
     }
 
+    pub fn stop(&self, global: bool) -> anyhow::Result<()> {
+        // Call mcd_stop_f with global set to false (0) to stop only this core
+        let result = unsafe { MCD_LIB.mcd_stop_f(self.core.as_ptr(), global as u32) };
+        if result != 0 {
+            Err(expect_error(Some(self))).with_context(|| "Failed to stop core")
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn get_reset_classes(&self) -> anyhow::Result<impl Iterator<Item = ResetClass>> {
         let mut reset_classes = 0;
         let result =
@@ -207,6 +217,35 @@ impl<'a> Core<'a> {
         size: u64,
     ) -> anyhow::Result<Trigger> {
         let mut trigger = mcd_trig_simple_core_st::create_trigger(trigger_type, address, size);
+        let mut trigger_id = 0;
+
+        let result = unsafe {
+            MCD_LIB.mcd_create_trig_f(
+                self.core.as_ptr(),
+                &mut trigger as *mut mcd_trig_simple_core_st as *mut c_void,
+                &mut trigger_id,
+            )
+        };
+
+        if result != 0 {
+            return Err(expect_error(Some(self))).with_context(|| "Library reported an error");
+        }
+
+        log::trace!("trigger is modified: {:?}", trigger.modified == TRUE);
+
+        Ok(Trigger {
+            core: self,
+            trigger_id,
+        })
+    }
+
+    pub fn create_hardware_breakpoint(
+        &self,
+        trigger_type: TriggerType,
+        address: u64,
+        size: u64,
+    ) -> anyhow::Result<Trigger> {
+        let mut trigger = mcd_trig_simple_core_st::create_hardware_trigger(trigger_type, address, size);
         let mut trigger_id = 0;
 
         let result = unsafe {
